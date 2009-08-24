@@ -1,0 +1,3 @@
+test:
+  host: nonexistanthost
+  logging: true
