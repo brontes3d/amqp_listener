@@ -1,0 +1,14 @@
+== AMQP Listener
+a.k.a "Floppy Ears" (since everything that connects to RabbitMQ apparently has to have a cute lapine nickname)
+
+So this plugin is just like ActiveMessaging or Workling, except that it's specific to sending and handling AMQP messages, and being so specific it's much simpler.  It's basically a light wrapper around http://github.com/tmm1/amqp to integrate like Workling/ActiveMessaging into your rails app.  Meaning it gives you a script you can run alongside your rails app to handle messages, a folder to define all those message handlers in, and a yaml config file to define your AMQP connections.
+
+=== Setup
+When we have a generator, it will make amqp_listeners folder in app, and amqp_listener.yml file in config and an amqp_listener script in script
+
+for now you can just use: AmqpListener.run and let the exceptions lead you into the rest
+
+
+Copyright (c) 2008 Brontes Technologies Inc., a 3M company, released under the MIT license.
+
+Authored by Jacob Burkhart.
