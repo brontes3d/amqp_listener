@@ -54,24 +54,40 @@ class AmqpListener
     @@listeners
   end
   
+  def self.listener_load_paths
+    @@listener_load_paths ||= [default_load_path]
+  end
+  
+  def self.default_load_path
+    "#{RAILS_ROOT}/app/amqp_listeners/*.rb"
+  end
+  
   def self.send(to_queue, message)
     if Thread.current[:mq]
       queue = MQ.queue(to_queue, :durable => true)    
       queue.publish(message, {:persistent => true})      
     else
-      AMQP.start(config) do
-        queue = MQ.queue(to_queue, :durable => true)
+      begin
+        AMQP.start(config) do
+          queue = MQ.queue(to_queue, :durable => true)
       
-        queue.publish(message, {:persistent => true})
+          queue.publish(message, {:persistent => true})
 
-        AMQP.stop do
-          EM.stop
-          #ALERT hacky workaround: 
-          #Cause AMQP really shouldn't be doing @conn ||= connect *args
-          #unless it's gonna reliably nullify @conn on disconnect (which is ain't)
-          Thread.current[:mq] = nil
-          AMQP.instance_eval{ @conn = nil }
-          AMQP.instance_eval{ @closing = false }
+          AMQP.stop do
+            EM.stop
+            #ALERT hacky workaround: 
+            #Cause AMQP really shouldn't be doing @conn ||= connect *args
+            #unless it's gonna reliably nullify @conn on disconnect (which is ain't)
+            Thread.current[:mq] = nil
+            AMQP.instance_eval{ @conn = nil }
+            AMQP.instance_eval{ @closing = false }
+          end
+        end
+      rescue RuntimeError => e
+        if e.message == "no connection"
+          retry
+        else
+          raise
         end
       end
     end
@@ -79,7 +95,9 @@ class AmqpListener
   
   def self.load_listeners
     if self.listeners.empty?
-      Dir.glob("#{RAILS_ROOT}/app/amqp_listeners/*.rb").each { |f| require f }
+      self.listener_load_paths.each do |load_path|
+        Dir.glob(load_path).each { |f| require f }
+      end
     end
   end
   
