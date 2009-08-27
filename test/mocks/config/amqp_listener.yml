@@ -1,3 +1,8 @@
 test:
   host: nonexistanthost
   logging: true
+  reconnect_timer: 0.1
+  fallback_servers:
+    - host: nonexistant1
+      port: 12345
+    - host: nonexistant2

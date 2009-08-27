@@ -1,3 +1,5 @@
+require 'rubygems'
+gem 'brontes3d-amqp'
 require 'mq'
 
 class AmqpListener
@@ -25,7 +27,31 @@ class AmqpListener
   def self.config
     require 'activesupport'
     @@config ||= YAML.load_file("#{RAILS_ROOT}/config/amqp_listener.yml")
-    @@config[RAILS_ENV].symbolize_keys
+    @@configs ||= symbolized_config
+  end
+  
+  def self.symbolized_config
+    symbolize = nil
+    symbolize_hash = Proc.new do |hash|
+      hash.each do |k, v|
+        hash[k.to_sym] = symbolize.call(v)
+      end
+    end
+    symbolize_array = Proc.new do |array|
+      array.collect do |v|
+        symbolize.call(v)
+      end
+    end
+    symbolize = Proc.new do |it|
+      if it.is_a?(Hash)
+        symbolize_hash.call(it)
+      elsif it.is_a?(Array)
+        symbolize_array.call(it)
+      else
+        it
+      end
+    end
+    symbolize.call(@@config[RAILS_ENV].symbolize_keys)
   end
   
   
@@ -101,13 +127,13 @@ class AmqpListener
     end
   end
   
-  def self.run
+  def self.run(use_config = self.config)
     self.load_listeners
     
     Signal.trap('INT') { AMQP.stop{ EM.stop } }
     Signal.trap('TERM'){ AMQP.stop{ EM.stop } }
     
-    AMQP.start(config) do
+    AMQP.start(use_config) do
       self.listeners.each do |l|
         listener = l.new
         

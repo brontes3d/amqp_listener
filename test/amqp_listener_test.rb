@@ -44,6 +44,40 @@ class AmqpListenerTest < ActiveSupport::TestCase
     AmqpListener.run
   end
   
+  def test_reconnect_to_fallback_servers
+    @times_connected = 0
+    @connect_args = []
+    
+    disconnector = Proc.new do
+      EM.next_tick do
+        @client = EM.class_eval{ @conns }[99]
+        @client.stubs(:send_data).returns(true)
+        @client.connection_completed
+        EM.class_eval{ @conns.delete(99) }
+        @client.unbind
+      end
+    end
+    
+    EventMachine.stubs(:connect_server).returns(99).with do |arg1, arg2| 
+      @connect_args << [arg1, arg2]
+      @times_connected += 1
+      disconnector.call
+      true
+    end
+    
+    #this test should continously connect and disconnect until this 1 second timer forces it to stop 
+    EM.next_tick{ EM.add_timer(1){ EM.stop_event_loop } }
+    AmqpListener.run
+    # puts "reconnected #{@times_connected} times"
+    # puts "connect_args #{@connect_args.inspect}"
+    assert_equal(7, @times_connected)
+    assert_equal([
+      ["nonexistanthost", 5672], ["nonexistant1", 12345], ["nonexistant2", 5672], 
+      ["nonexistanthost", 5672], ["nonexistant1", 12345], ["nonexistant2", 5672], 
+      ["nonexistanthost", 5672]],
+      @connect_args)
+  end
+  
   def test_this_is_how_you_test_listeners_directly
     TestListener.side_effect = false
     TestListener.new.on_message("some message")
