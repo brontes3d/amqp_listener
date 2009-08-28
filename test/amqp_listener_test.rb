@@ -44,6 +44,27 @@ class AmqpListenerTest < ActiveSupport::TestCase
     AmqpListener.run
   end
   
+  def test_expand_config
+    simple = YAML::load %Q{
+      test:
+        host: [nonexistanthost, alsononexistant]
+        port: 1234
+        logging: true
+        reconnect_timer: 0.1
+    }
+    expanded = YAML::load %Q{
+      test:
+        host: nonexistanthost
+        port: 1234
+        logging: true
+        reconnect_timer: 0.1      
+        fallback_servers:
+          - host: alsononexistant
+            port: 1234
+    }
+    assert_equal(AmqpListener.expand_config(simple['test']),  AmqpListener.symbolize_config(expanded['test']))
+  end
+  
   def test_reconnect_to_fallback_servers
     @times_connected = 0
     @connect_args = []

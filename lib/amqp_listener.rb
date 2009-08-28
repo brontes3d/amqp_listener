@@ -25,15 +25,15 @@ class AmqpListener
   end
   
   def self.config
-    require 'activesupport'
     @@config ||= YAML.load_file("#{RAILS_ROOT}/config/amqp_listener.yml")
-    @@configs ||= symbolized_config
+    @@configs ||= @@config[RAILS_ENV]
   end
   
-  def self.symbolized_config
+  def self.symbolize_config(c)
     symbolize = nil
     symbolize_hash = Proc.new do |hash|
       hash.each do |k, v|
+        hash.delete(k)
         hash[k.to_sym] = symbolize.call(v)
       end
     end
@@ -51,9 +51,24 @@ class AmqpListener
         it
       end
     end
-    symbolize.call(@@config[RAILS_ENV].symbolize_keys)
+    symbolize.call(c)
   end
   
+  def self.expand_config(cofig_given)
+    to_return = symbolize_config(cofig_given)
+    if to_return[:host].is_a?(Array)
+      to_return[:fallback_servers] ||= []
+      to_return[:host], *rest = to_return[:host]
+      rest.each do |host|
+        to_append = {:host => host}
+        if to_return[:port]
+          to_append[:port] = to_return[:port]
+        end
+        to_return[:fallback_servers] << to_append
+      end
+    end
+    to_return
+  end
   
   def self.exception_handler(&block)
     @@exception_handler = block
@@ -94,7 +109,7 @@ class AmqpListener
       queue.publish(message, {:persistent => true})      
     else
       begin
-        AMQP.start(config) do
+        AMQP.start(expand_config(config)) do
           queue = MQ.queue(to_queue, :durable => true)
       
           queue.publish(message, {:persistent => true})
@@ -133,7 +148,7 @@ class AmqpListener
     Signal.trap('INT') { AMQP.stop{ EM.stop } }
     Signal.trap('TERM'){ AMQP.stop{ EM.stop } }
     
-    AMQP.start(use_config) do
+    AMQP.start(expand_config(use_config)) do
       self.listeners.each do |l|
         listener = l.new
         
