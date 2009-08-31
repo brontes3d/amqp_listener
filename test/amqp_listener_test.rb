@@ -9,6 +9,10 @@ class AmqpListenerTest < ActiveSupport::TestCase
     TestListener.side_effect = false
   end
   
+  def teardown
+    AmqpListener.cleanup
+  end
+  
   def test_recieve_a_message
     AMQP.stubs(:start).yields
     header_stub = stub(:ack => true)
@@ -42,6 +46,42 @@ class AmqpListenerTest < ActiveSupport::TestCase
     AmqpListener.load_listeners
     JsonListener.any_instance.expects(:on_message).with(hash)
     AmqpListener.run
+  end
+  
+  def test_reconnect_logging
+    class << RAILS_DEFAULT_LOGGER
+      attr_accessor :messages_logged      
+      def add(*args, &block)
+        message = args[2]
+        self.messages_logged << message
+        super
+      end
+    end
+    RAILS_DEFAULT_LOGGER.messages_logged = []
+    
+    disconnector = Proc.new do
+      EM.next_tick do
+        @client = EM.class_eval{ @conns }[99]
+        @client.stubs(:send_data).returns(true)
+        @client.connection_completed
+        EM.class_eval{ @conns.delete(99) }
+        @client.unbind
+      end
+    end
+    
+    EventMachine.stubs(:connect_server).returns(99).with do |arg1, arg2| 
+      disconnector.call
+      true
+    end
+    
+    #this test should continously connect and disconnect until this 1 second timer forces it to stop 
+    EM.next_tick{ EM.add_timer(0.5){ EM.stop_event_loop } }
+    AmqpListener.run
+    
+    assert_equal(["Connecting to nonexistant1 12345 (attempt 1)", 
+                  "Connecting to nonexistant2 5672 (attempt 2)", 
+                  "Connecting to nonexistanthost 5672 (attempt 3)"],
+                  RAILS_DEFAULT_LOGGER.messages_logged)
   end
   
   def test_expand_config

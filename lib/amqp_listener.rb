@@ -108,30 +108,26 @@ class AmqpListener
       queue = MQ.queue(to_queue, :durable => true)    
       queue.publish(message, {:persistent => true})      
     else
-      begin
-        AMQP.start(expand_config(config)) do
-          queue = MQ.queue(to_queue, :durable => true)
-      
-          queue.publish(message, {:persistent => true})
+      AMQP.start(expand_config(config)) do
+        queue = MQ.queue(to_queue, :durable => true)
+    
+        queue.publish(message, {:persistent => true})
 
-          AMQP.stop do
-            EM.stop
-            #ALERT hacky workaround: 
-            #Cause AMQP really shouldn't be doing @conn ||= connect *args
-            #unless it's gonna reliably nullify @conn on disconnect (which is ain't)
-            Thread.current[:mq] = nil
-            AMQP.instance_eval{ @conn = nil }
-            AMQP.instance_eval{ @closing = false }
-          end
-        end
-      rescue RuntimeError => e
-        if e.message == "no connection"
-          retry
-        else
-          raise
+        AMQP.stop do
+          EM.stop
+          cleanup
         end
       end
     end
+  end
+  
+  def self.cleanup
+    #ALERT hacky workaround: 
+    #Cause AMQP really shouldn't be doing @conn ||= connect *args
+    #unless it's gonna reliably nullify @conn on disconnect (which is ain't)
+    Thread.current[:mq] = nil
+    AMQP.instance_eval{ @conn = nil }
+    AMQP.instance_eval{ @closing = false }    
   end
   
   def self.load_listeners

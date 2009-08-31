@@ -1,6 +1,6 @@
 class JsonListener < AmqpListener::Listener
   
-  subscribes_to :test_q
+  subscribes_to :test_json_q
   
   message_format :json_hash
   
