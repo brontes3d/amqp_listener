@@ -9,6 +9,6 @@ When we have a generator, it will make amqp_listeners folder in app, and amqp_li
 for now you can just use: AmqpListener.run and let the exceptions lead you into the rest
 
 
-Copyright (c) 2008 Brontes Technologies Inc., a 3M company, released under the MIT license.
+Copyright (c) 2009 3M. All rights reserved. Released under the MIT license.
 
 Authored by Jacob Burkhart.
