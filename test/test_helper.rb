@@ -1,4 +1,6 @@
 require 'rubygems'
+require 'test/unit/notification'
+require 'test/unit'
 require 'mocha'
 require 'active_support'
 require 'active_support/test_case'
