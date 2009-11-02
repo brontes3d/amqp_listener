@@ -2,6 +2,9 @@ test:
   host: nonexistanthost
   logging: true
   reconnect_timer: 0.1
+  lock:
+    sleep_time: 0.1
+    max_retry: 5
   fallback_servers:
     - host: nonexistant1
       port: 12345

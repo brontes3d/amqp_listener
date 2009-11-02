@@ -11,5 +11,5 @@ class TestListener < AmqpListener::Listener
     end
     TestListener.side_effect = true
   end
-  
+    
 end
