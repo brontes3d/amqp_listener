@@ -20,4 +20,5 @@ require File.join(File.dirname(__FILE__), "..", "init")
 #turn off excessive logging
 AmqpListener.set_logger do |level, to_log|
   #do nothing with it
+  # puts to_log
 end

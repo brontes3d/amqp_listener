@@ -182,9 +182,16 @@ class AmqpListener
     if Thread.current[:mq]
       send_it.call
     else
-      AMQP.start(expand_config(config)) do
-        send_it.call
-        shutdown
+      if AmqpListener::RackRunner.enabled?
+        AmqpListener::RackRunner.run do |task|
+          send_it.call
+          task.done
+        end
+      else
+        AMQP.start(expand_config(config)) do
+          send_it.call
+          shutdown
+        end
       end
     end
   end
@@ -213,18 +220,19 @@ class AmqpListener
     end
   end
   
-  def self.start(use_config = self.config)    
-    AMQP.start(expand_config(use_config)) do
-      yield
+  def self.start(base_config = self.config)
+    expanded_config = expand_config(base_config)
+    AMQP.start(expanded_config) do
+      yield expanded_config
     end
   end
   
-  def self.run(use_config = self.config)
+  def self.run(base_config = self.config)
     Signal.trap('INT') { AMQP.stop{ EM.stop } }
     Signal.trap('TERM'){ AMQP.stop{ EM.stop } }
     
     load_listeners
-    start(use_config) do
+    start(base_config) do |expanded_config|
       self.listeners.each do |l|
         listener = l.new
         
