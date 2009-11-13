@@ -1,6 +1,6 @@
 require File.join(File.dirname(__FILE__), "test_helper")
 
-class RackRunnerTest < ActiveSupport::TestCase
+class TaskRunnerTest < ActiveSupport::TestCase
   
   def setup
     AmqpListener.load_listeners
@@ -25,7 +25,7 @@ class RackRunnerTest < ActiveSupport::TestCase
     end
   end
   
-  def test_rack_runner_when_we_get_a_response
+  def test_runner_when_we_get_a_response
     #This block stubs out event machine from making any calls to TCP..
     #causes the attempt to connect to "just succeeed"
     EventMachine.stubs(:connect_server).returns(99).with do |arg1, arg2| 
@@ -51,31 +51,21 @@ class RackRunnerTest < ActiveSupport::TestCase
     
     @app_stub_got_responses = []
     
-    #app stubs the actual Rack app that is handling a request
-    #in this case all we want it to do is excercise AmqpListener::RackRunner.run
-    app = AppStub.new
-    app.callback = Proc.new do
-      AmqpListener::RackRunner.run do |task|
-        response_q_name = "named_response_q_100"
-        queue = MQ.queue(response_q_name)
-        queue.subscribe(:ack => false) do |h, m|
-          @app_stub_got_responses << m
-          task.done
-        end
-        AmqpListener.send("get_q", {:response_q => response_q_name}.to_json, false)
+    AmqpListener::TaskRunner.run do |task|
+      response_q_name = "named_response_q_100"
+      queue = MQ.queue(response_q_name)
+      queue.subscribe(:ack => false) do |h, m|
+        @app_stub_got_responses << m
+        task.done
       end
-    end
-    
-    #now that everything is set up, we invoke it
-    env = stub()    
-    rack_runner = AmqpListener::RackRunner.new(app)
-    rack_runner.call(env)
+      AmqpListener.send("get_q", {:response_q => response_q_name}.to_json, false)
+    end    
     
     assert_equal(["{\"response_q\":\"named_response_q_100\"}"], @q_stub_got_messages)
     assert_equal(["response to {\"response_q\":\"named_response_q_100\"}"], @app_stub_got_responses)
   end
 
-  def test_rack_runner_when_we_timeout
+  def test_runner_when_we_timeout
     #This block stubs out event machine from making any calls to TCP..
     #causes the attempt to connect to "just succeeed"
     EventMachine.stubs(:connect_server).returns(99).with do |arg1, arg2| 
@@ -100,23 +90,16 @@ class RackRunnerTest < ActiveSupport::TestCase
     
     #app stubs the actual Rack app that is handling a request
     #in this case all we want it to do is excercise AmqpListener::RackRunner.run
-    app = AppStub.new
-    app.callback = Proc.new do
-      AmqpListener::RackRunner.run do |task|
-        response_q_name = "named_response_q_99"
-        queue = MQ.queue(response_q_name)
-        queue.subscribe(:ack => false) do |h, m|
-          @app_stub_got_responses << m
-          task.done
-        end
-        AmqpListener.send("get_q", {:response_q => response_q_name}.to_json, false)
+    AmqpListener::TaskRunner.run do |task|
+      response_q_name = "named_response_q_99"
+      queue = MQ.queue(response_q_name)
+      queue.subscribe(:ack => false) do |h, m|
+        @app_stub_got_responses << m
+        task.done
       end
+      AmqpListener.send("get_q", {:response_q => response_q_name}.to_json, false)
     end
-    
-    #now that everything is set up, we invoke it
-    env = stub()    
-    rack_runner = AmqpListener::RackRunner.new(app)
-    rack_runner.call(env)
+
     #TODO: how do we assert that we waited 2 seconds before passing control back main thread here?
     
     assert_equal(["{\"response_q\":\"named_response_q_99\"}"], @q_stub_got_messages)
@@ -149,35 +132,25 @@ class RackRunnerTest < ActiveSupport::TestCase
     
     @app_stub_got_responses = []
     
-    #app stubs the actual Rack app that is handling a request
-    #in this case all we want it to do is excercise AmqpListener::RackRunner.run
-    app = AppStub.new
-    app.callback = Proc.new do
-      task1 = AmqpListener::RackRunner.prepare_task do |task|
-        response_q_name = "named_response_q_98"
-        queue = MQ.queue(response_q_name)
-        queue.subscribe(:ack => false) do |h, m|
-          @app_stub_got_responses << m
-          task.done
-        end
-        AmqpListener.send("get_q", {:response_q => response_q_name}.to_json, false)
+    task1 = AmqpListener::TaskRunner.prepare_task do |task|
+      response_q_name = "named_response_q_98"
+      queue = MQ.queue(response_q_name)
+      queue.subscribe(:ack => false) do |h, m|
+        @app_stub_got_responses << m
+        task.done
       end
-      task2 = AmqpListener::RackRunner.prepare_task do |task|
-        response_q_name = "named_response_q_97"
-        queue = MQ.queue(response_q_name)
-        queue.subscribe(:ack => false) do |h, m|
-          @app_stub_got_responses << m
-          task.done
-        end
-        AmqpListener.send("get_q", {:response_q => response_q_name}.to_json, false)
-      end
-      AmqpListener::RackRunner.run_tasks(task1, task2)
+      AmqpListener.send("get_q", {:response_q => response_q_name}.to_json, false)
     end
-    
-    #now that everything is set up, we invoke it
-    env = stub()    
-    rack_runner = AmqpListener::RackRunner.new(app)
-    rack_runner.call(env)
+    task2 = AmqpListener::TaskRunner.prepare_task do |task|
+      response_q_name = "named_response_q_97"
+      queue = MQ.queue(response_q_name)
+      queue.subscribe(:ack => false) do |h, m|
+        @app_stub_got_responses << m
+        task.done
+      end
+      AmqpListener.send("get_q", {:response_q => response_q_name}.to_json, false)
+    end
+    AmqpListener::TaskRunner.run_tasks(task1, task2)    
     
     assert_equal(["{\"response_q\":\"named_response_q_98\"}", "{\"response_q\":\"named_response_q_97\"}"], 
                  @q_stub_got_messages)
@@ -206,15 +179,7 @@ class RackRunnerTest < ActiveSupport::TestCase
       true
     end.returns(true)
     
-    app = AppStub.new
-    app.callback = Proc.new do
-      AmqpListener.send("test_send_q", "test_message_to_send_q")
-    end
-    
-    #now that everything is set up, we invoke it
-    env = stub()    
-    rack_runner = AmqpListener::RackRunner.new(app)
-    rack_runner.call(env)
+    AmqpListener.send("test_send_q", "test_message_to_send_q")
     
     assert_equal(["test_message_to_send_q"], @q_stub_got_messages)
   end
