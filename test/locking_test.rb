@@ -123,6 +123,7 @@ class LockingTest < ActiveSupport::TestCase
     qstub = stub()
     qstub.stubs(:subscribe).yields(header_stub, "message body")
     MQ.stubs(:queue).returns(qstub)
+    MQ.stubs(:prefetch).returns(true)
     AmqpListener.stubs(:listeners).returns([listner_class])
   end
   

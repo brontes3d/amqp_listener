@@ -23,6 +23,7 @@ class AmqpListenerTest < ActiveSupport::TestCase
     q_stub = stub()
     q_stub.stubs(:subscribe).yields(header_stub, "message body")
     MQ.stubs(:queue).returns(q_stub)
+    MQ.stubs(:prefetch).returns(true)
     
     AmqpListener.load_listeners
     TestListener.any_instance.expects(:on_message).with("message body")
@@ -30,10 +31,19 @@ class AmqpListenerTest < ActiveSupport::TestCase
   end
   
   def test_send_a_message
-    AMQP.stubs(:start).yields
+    # AMQP.stubs(:start).yields
+    # q_stub = stub()
+    # MQ.expects(:queue).with("test_q", :durable => true).returns(q_stub)
+    # q_stub.expects(:publish).with("test message", :persistent => true)
+    
+    bunny_stub = stub()
+    Bunny.stubs(:new).returns(bunny_stub)
+    bunny_stub.stubs(:start).returns(true)
+
     q_stub = stub()
-    MQ.expects(:queue).with("test_q", :durable => true).returns(q_stub)
+    bunny_stub.expects(:queue).with("test_q", :durable => true, :auto_delete => false).returns(q_stub)
     q_stub.expects(:publish).with("test message", :persistent => true)
+        
     AmqpListener.send("test_q", "test message")
   end
   
@@ -46,6 +56,7 @@ class AmqpListenerTest < ActiveSupport::TestCase
     q_stub = stub()
     q_stub.stubs(:subscribe).yields(header_stub, json)
     MQ.stubs(:queue).returns(q_stub)
+    MQ.stubs(:prefetch).returns(true)
     
     AmqpListener.load_listeners
     JsonListener.any_instance.expects(:on_message).with(hash)
@@ -215,6 +226,7 @@ class AmqpListenerTest < ActiveSupport::TestCase
     q_stub = stub()
     q_stub.stubs(:subscribe).yields(header_stub, message_body)
     MQ.stubs(:queue).returns(q_stub)
+    MQ.stubs(:prefetch).returns(true)
     AmqpListener.run
   end
   

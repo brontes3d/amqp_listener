@@ -1,6 +1,7 @@
 require 'rubygems'
 #gem 'brontes3d-amqp'
 require 'mq'
+require 'bunny'
 
 class AmqpListener
   
@@ -170,22 +171,27 @@ class AmqpListener
   end
   
   def self.send(to_queue, message, reliable = true)
-    send_it = Proc.new do
+    send_it = Proc.new do |q_maker|
       if reliable
-        queue = MQ.queue(to_queue, :durable => true)  
+        queue = q_maker.queue(to_queue, :durable => true, :auto_delete => false)
         queue.publish(message, {:persistent => true})
       else
-        queue = MQ.queue(to_queue)
+        queue = q_maker.queue(to_queue)
         queue.publish(message, {})
       end
     end
     if Thread.current[:mq]
-      send_it.call
+      send_it.call(MQ)
     else
-      AmqpListener::TaskRunner.run do |task|
-        send_it.call
-        task.done
-      end
+      #Trying a send with Bunny instead
+      b = Bunny.new(expand_config(self.config))
+  		b.start
+      send_it.call(b)
+      # old way:
+      # AmqpListener::TaskRunner.run do |task|
+      #   send_it.call(MQ)
+      #   task.done
+      # end
     end
   end
   
@@ -216,6 +222,7 @@ class AmqpListener
   def self.start(base_config = self.config)
     expanded_config = expand_config(base_config)
     AMQP.start(expanded_config) do
+      MQ.prefetch(1)
       @@running_config = expanded_config
       yield expanded_config
     end

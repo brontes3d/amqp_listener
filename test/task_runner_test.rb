@@ -159,29 +159,48 @@ class TaskRunnerTest < ActiveSupport::TestCase
   end
   
   def test_send_from_main_thread
-    #This block stubs out event machine from making any calls to TCP..
-    #causes the attempt to connect to "just succeeed"
-    EventMachine.stubs(:connect_server).returns(99).with do |arg1, arg2| 
-      EM.next_tick do
-        @client = EM.class_eval{ @conns }[99]
-        @client.stubs(:send_data).returns(true)
-        @client.succeed(@client)
-      end
-      true
-    end
+    #---- for AMQP start/stop
     
+    # #This block stubs out event machine from making any calls to TCP..
+    # #causes the attempt to connect to "just succeeed"
+    # EventMachine.stubs(:connect_server).returns(99).with do |arg1, arg2| 
+    #   EM.next_tick do
+    #     @client = EM.class_eval{ @conns }[99]
+    #     @client.stubs(:send_data).returns(true)
+    #     @client.succeed(@client)
+    #   end
+    #   true
+    # end
+    # 
+    # @q_stub_got_messages = []
+    # 
+    # #This block of stubbing captures attemps to send messages... 
+    # #and whenever it captures such a thing, it simulates sending a message to the response_q
+    # MQ::Queue.any_instance.stubs(:publish).with do |message, opts|
+    #   @q_stub_got_messages << message
+    #   true
+    # end.returns(true)
+    # 
+    
+    #----- for Bunny
+    
+    bunny_stub = stub()
+    Bunny.stubs(:new).returns(bunny_stub)
+    bunny_stub.stubs(:start).returns(true)
+
+    q_stub = stub()
+    bunny_stub.stubs(:queue).returns(q_stub)
     @q_stub_got_messages = []
-    
-    #This block of stubbing captures attemps to send messages... 
-    #and whenever it captures such a thing, it simulates sending a message to the response_q
-    MQ::Queue.any_instance.stubs(:publish).with do |message, opts|
+    q_stub.stubs(:publish).with do |message, opts|
       @q_stub_got_messages << message
       true
     end.returns(true)
     
+    #----- final assertions
+      
     AmqpListener.send("test_send_q", "test_message_to_send_q")
     
-    assert_equal(["test_message_to_send_q"], @q_stub_got_messages)
+    assert_equal(["test_message_to_send_q"], @q_stub_got_messages)    
   end
   
 end
