@@ -52,7 +52,12 @@ class AmqpListener
     
   end
   
-  class Listener    
+  class Listener
+    def self.queue_options(queue_options)
+      self.send(:define_method, :queue_options) do
+        queue_options
+      end
+    end
     def self.subscribes_to(q_name)
       self.send(:define_method, :queue_name) do
         q_name
@@ -170,14 +175,14 @@ class AmqpListener
     "#{RAILS_ROOT}/app/amqp_listeners/*.rb"
   end
   
-  def self.send(to_queue, message, reliable = true)
+  def self.send(to_queue, message, reliable = true, q_opts = {}, message_opts = {})
     send_it = Proc.new do |q_maker|
       if reliable
-        queue = q_maker.queue(to_queue, :durable => true, :auto_delete => false)
-        queue.publish(message, {:persistent => true})
+        queue = q_maker.queue(to_queue, {:durable => true, :auto_delete => false}.merge(q_opts))
+        queue.publish(message, {:persistent => true}.merge(message_opts))
       else
-        queue = q_maker.queue(to_queue)
-        queue.publish(message, {})
+        queue = q_maker.queue(to_queue, {:durable => false, :auto_delete => false}.merge(q_opts))
+        queue.publish(message, {:persistent => false}.merge(message_opts))
       end
     end
     if Thread.current[:mq]
@@ -246,8 +251,8 @@ class AmqpListener
         end
         AmqpListener.log :info, "registering listener #{l.inspect} on Q #{listener.queue_name}"
         
-        # NOTE : :auto_delete option is false by default
-        queue = MQ.queue(listener.queue_name, :durable => true)
+        extra_queue_opts = (listener.respond_to?(:queue_options) && listener.queue_options) || {}
+        queue = MQ.queue(listener.queue_name, {:durable => true, :auto_delete => false}.merge(extra_queue_opts))
         
         queue.subscribe(:ack => true) do |h, m|
           run_message(listener, h, m)

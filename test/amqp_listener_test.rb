@@ -1,5 +1,11 @@
 require File.join(File.dirname(__FILE__), "test_helper")
 
+require 'activerecord'
+ActiveRecord::Base.establish_connection(:adapter => "sqlite3", :database => ":memory:")
+
+load File.expand_path(File.dirname(__FILE__) + "/mocks/schema.rb")
+require File.expand_path(File.dirname(__FILE__) + '/mocks/lock.rb')
+
 class AmqpListenerTest < ActiveSupport::TestCase
   
   def setup
@@ -168,7 +174,13 @@ class AmqpListenerTest < ActiveSupport::TestCase
   def test_another_way_to_test_messaging_listeners_directly
     TestListener.side_effect = false
     stub_sending_a_message(TestListener, "some message")
-    assert_equal(true, TestListener.side_effect)    
+    assert_equal(true, TestListener.side_effect)
+    assert_equal([:test_q, {:durable => true, :auto_delete => false}], @queue_created_with_args)
+  end
+  
+  def test_non_durable_listener
+    stub_sending_a_message(NonDurable, "some message")
+    assert_equal([:non_durable_q, {:durable => false, :auto_delete => true}], @queue_created_with_args)    
   end
   
   def test_exception_handling
@@ -225,7 +237,10 @@ class AmqpListenerTest < ActiveSupport::TestCase
     header_stub = stub(:ack => true)
     q_stub = stub()
     q_stub.stubs(:subscribe).yields(header_stub, message_body)
-    MQ.stubs(:queue).returns(q_stub)
+    MQ.stubs(:queue).returns(q_stub).with do |qname, options|
+      @queue_created_with_args = [qname, options]
+      true
+    end
     MQ.stubs(:prefetch).returns(true)
     AmqpListener.run
   end
