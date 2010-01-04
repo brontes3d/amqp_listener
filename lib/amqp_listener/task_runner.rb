@@ -1,13 +1,20 @@
 class AmqpListener::TaskRunner
   
-  class Task
-    def initialize(&action)
+  class Task    
+    class Timeout < StandardError; end    
+    attr_reader :task_info, :timeout_exception
+    def initialize(task_info = {}, &action)
       @done = false
+      @task_info = task_info
       @action = action
+      @timeout_exception = false
     end
     def on_finish(&block)
       @finish_blocks ||= []
       @finish_blocks << block
+    end
+    def timeout
+      @task_info[:timeout]
     end
     def run
       @action.call(self)
@@ -15,12 +22,31 @@ class AmqpListener::TaskRunner
     def done?
       @done
     end
-    def done(&block)
+    def done(succeeded = true, &block)
       unless @done
         @done = true
+        begin
+          if @task_info[:force] && !succeeded
+            raise Timeout, "Timeout running task #{@task_info.inspect}"
+          end
+        rescue => e
+          @timeout_exception = e
+        end
         @finish_blocks.each(&:call)
-        if block_given?
-          yield
+        if @timeout_exception
+          if @task_info[:exception_handler]
+            @task_info[:exception_handler].call(@timeout_exception)
+          end
+        elsif block_given?
+          begin
+            yield
+          rescue => e
+            if @task_info[:exception_handler]
+              @task_info[:exception_handler].call(e)
+            else
+              raise e
+            end
+          end
         end
       end
     end
@@ -30,8 +56,8 @@ class AmqpListener::TaskRunner
     run_tasks(prepare_task(&block))
   end
   
-  def self.prepare_task(&block)
-    task = Task.new(&block)
+  def self.prepare_task(task_info = {}, &block)
+    task = Task.new(task_info, &block)
     task.on_finish do
       @@tasks.delete(task)
     end
@@ -51,16 +77,21 @@ class AmqpListener::TaskRunner
       begin
         current_thread = Thread.current
         Thread.new do
-          @@tasks.each do |task|
-            task.on_finish do
-              if @@tasks.empty?
-                AmqpListener.shutdown
-                current_thread.run
+          begin
+            @@tasks.each do |task|
+              task.on_finish do
+                if @@tasks.empty?
+                  AmqpListener.shutdown
+                  current_thread.run
+                end
               end
             end
-          end
-          AmqpListener.start do |config|
-            AmqpListener::TaskRunner.run_work_loop
+            AmqpListener.start do |config|
+              AmqpListener::TaskRunner.run_work_loop
+            end
+          rescue => e
+            AmqpListener.log :error, e.inspect
+            AmqpListener.log :error, e.backtrace.join("\n")
           end
         end
         unless @@tasks.empty?
@@ -81,10 +112,10 @@ class AmqpListener::TaskRunner
       else
         task = @@run_q.shift
         task.run
-        EM.add_timer(@@task_timeout) do
+        EM.add_timer(task.timeout || @@task_timeout) do
           unless task.done?
-            AmqpListener.log :warn, "Timed out on task #{task}"
-            task.done
+            AmqpListener.log :warn, "Timed out on task #{task.task_info.inspect}"
+            task.done(false)
           end
         end
       end

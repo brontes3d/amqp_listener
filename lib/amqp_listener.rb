@@ -227,7 +227,7 @@ class AmqpListener
       yield expanded_config
     end
   end
-  
+    
   def self.running_config
     @@running_config ||= {}
   end
@@ -260,11 +260,21 @@ class AmqpListener
     if AMQP.closing?
       AmqpListener.log :debug, "#{message} (ignored, redelivered later)"
     else
+      message_transformed = message
       retry_count = 0
       begin
         AmqpListener.log :info, "#{listener} is handling message: #{message}"
+        if listener.respond_to?(:exception_handler=)
+          listener.exception_handler = Proc.new do |exception|
+            get_exception_handler.call(listener, message_transformed, exception)
+            header.ack
+            AmqpListener.log :error, "#{listener} got exception while handling #{message} -- #{exception}"
+            AmqpListener.log :error, exception.backtrace.join("\n")
+          end
+        end
         if listener.respond_to?(:transform_message)
-          listener.on_message(listener.transform_message(message))
+          message_transformed = listener.transform_message(message)
+          listener.on_message(message_transformed)
         else
           listener.on_message(message)
         end
@@ -282,12 +292,12 @@ class AmqpListener
           retry
         end
       rescue => exception
-        get_exception_handler.call(listener, message, exception)
+        get_exception_handler.call(listener, message_transformed, exception)
         header.ack
         AmqpListener.log :error, "#{listener} got exception while handling #{message} -- #{exception}"
         AmqpListener.log :error, exception.backtrace.join("\n")
       end
-    end    
+    end
   end
   
 end
