@@ -188,7 +188,20 @@ class AmqpListener
     "#{RAILS_ROOT}/app/amqp_listeners/*.rb"
   end
   
+  class << self
+    attr_accessor :enable_message_sending
+    def disable_message_sending_while
+      prev_value = @enable_message_sending
+      @enable_message_sending = false
+      yield
+    ensure
+      @enable_message_sending = prev_value
+    end
+  end
+  self.enable_message_sending = true
+  
   def self.with_bunny(conf = expand_config(self.config), message = nil)
+    return unless enable_message_sending
     begin
       bunny = Bunny.new(conf)
       bunny.start
@@ -205,6 +218,7 @@ class AmqpListener
   end
   
   def self.send_to_exchange(routing_key, message, exchange_name = "amq.topic", exchange_type = :topic, exchange_opts = {}, message_opts = {})
+    return unless enable_message_sending
     if Thread.current[:mq]
       exchange = MQ::Exchange.new(MQ.new, exchange_type.to_sym, exchange_name, exchange_opts)
       exchange.publish(message, {:routing_key => routing_key}.merge(message_opts))
@@ -218,6 +232,7 @@ class AmqpListener
   end
   
   def self.send(to_queue, message, reliable = true, q_opts = {}, message_opts = {}, bunny = nil)
+    return unless enable_message_sending
     send_it = Proc.new do |q_maker|
       if reliable
         queue = q_maker.queue(to_queue, {:durable => true, :auto_delete => false}.merge(q_opts))
@@ -265,6 +280,7 @@ class AmqpListener
   end
   
   def self.start(base_config = self.config)
+    return unless enable_message_sending
     expanded_config = expand_config(base_config)
     AMQP.start(expanded_config) do
       MQ.prefetch(1)
