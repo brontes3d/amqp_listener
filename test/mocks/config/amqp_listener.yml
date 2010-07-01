@@ -1,5 +1,7 @@
 test:
-  host: nonexistanthost
+  host: 
+    - nonexistanthost
+    - nonexistant2
   logging: true
   reconnect_timer: 0.1
   task_timeout: 1
@@ -9,4 +11,3 @@ test:
   fallback_servers:
     - host: nonexistant1
       port: 12345
-    - host: nonexistant2

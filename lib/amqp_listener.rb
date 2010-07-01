@@ -63,6 +63,11 @@ class AmqpListener
         q_name
       end
     end
+    def self.exchange_config(config)
+      self.send(:define_method, :exchange_config) do
+        config
+      end
+    end
     def self.message_format(format)
       if format == :json_hash
         self.send(:define_method, :transform_message) do |message_body|
@@ -114,8 +119,9 @@ class AmqpListener
     symbolize.call(c)
   end
   
-  def self.expand_config(cofig_given)
-    to_return = symbolize_config(cofig_given)
+  def self.expand_config(config_given)
+    to_return = (symbolize_config(config_given) || {}).dup
+    to_return[:fallback_servers] = (to_return[:fallback_servers] || []).dup
     if to_return[:host].is_a?(Array)
       to_return[:fallback_servers] ||= []
       to_return[:host], *rest = to_return[:host]
@@ -149,12 +155,19 @@ class AmqpListener
     self.logger = block
   end
   
+  cattr_accessor :log_time_stamp_format
+  def self.log_time_stamp_format
+    @@time_stamp_format ||= "%Y-%m-%d %H:%M:%S %Z"
+  end
+  def self.log_time_stamp
+    "[#{Time.now.utc.strftime(AmqpListener.log_time_stamp_format)}]"
+  end
+  
   def self.get_exception_handler
     @@exception_handler ||= Proc.new do |listener, message, exception|
       if defined?(ExceptionNotifier)
         ExceptionNotifier.deliver_exception_notification(exception, nil, nil, 
-                  {:info => 
-                    {:listener => listener.class.name, :message => message}})
+                  {:info => {:listener => listener.class.name, :message => message}})
       else
         AmqpListener.log :error, "Exception occured in #{listener} while handling message #{message} : " + exception.inspect
         AmqpListener.log :error, exception.backtrace.join("\n")
@@ -175,7 +188,36 @@ class AmqpListener
     "#{RAILS_ROOT}/app/amqp_listeners/*.rb"
   end
   
-  def self.send(to_queue, message, reliable = true, q_opts = {}, message_opts = {})
+  def self.with_bunny(conf = expand_config(self.config), message = nil)
+    begin
+      bunny = Bunny.new(conf)
+      bunny.start
+      yield bunny
+    rescue Exception, Timeout::Error => e
+      get_exception_handler.call(bunny, message, e)
+      if next_host = conf[:fallback_servers].shift
+        conf[:host] = next_host[:host]
+        retry
+      else
+        raise e
+      end
+    end
+  end
+  
+  def self.send_to_exchange(routing_key, message, exchange_name = "amq.topic", exchange_type = :topic, exchange_opts = {}, message_opts = {})
+    if Thread.current[:mq]
+      exchange = MQ::Exchange.new(MQ.new, exchange_type.to_sym, exchange_name, exchange_opts)
+      exchange.publish(message, {:routing_key => routing_key}.merge(message_opts))
+    else
+      # send synchronously with Bunny instead      
+      with_bunny(expand_config(self.config), message) do |bunny|
+        exchange = bunny.exchange(exchange_name, {:type => exchange_type.to_s}.merge(exchange_opts))
+        exchange.publish(message, {:key => routing_key}.merge(message_opts))
+      end
+    end
+  end
+  
+  def self.send(to_queue, message, reliable = true, q_opts = {}, message_opts = {}, bunny = nil)
     send_it = Proc.new do |q_maker|
       if reliable
         queue = q_maker.queue(to_queue, {:durable => true, :auto_delete => false}.merge(q_opts))
@@ -185,18 +227,16 @@ class AmqpListener
         queue.publish(message, {:persistent => false}.merge(message_opts))
       end
     end
-    if Thread.current[:mq]
+    
+    if bunny
+      send_it.call(bunny)
+    elsif Thread.current[:mq]
       send_it.call(MQ)
     else
-      #Trying a send with Bunny instead
-      b = Bunny.new(expand_config(self.config))
-  		b.start
-      send_it.call(b)
-      # old way:
-      # AmqpListener::TaskRunner.run do |task|
-      #   send_it.call(MQ)
-      #   task.done
-      # end
+      # send synchronously with Bunny instead      
+      with_bunny(expand_config(self.config), message) do |bunny|
+        send_it.call(bunny)
+      end
     end
   end
   
@@ -247,12 +287,36 @@ class AmqpListener
         listener = l.new
         
         unless listener.queue_name
-          raise "#{l} needs to specify the queue_name it subscribes_to"
+          raise ArgumentError, "#{l} needs to specify the queue_name it subscribes_to"
         end
-        AmqpListener.log :info, "registering listener #{l.inspect} on Q #{listener.queue_name}"
+        
+        bind_proc = nil
+        info_string = "#{AmqpListener.log_time_stamp} registering listener #{l.inspect} on Q #{listener.queue_name.to_s.inspect}"
+        if listener.respond_to?(:exchange_config) && listener.exchange_config
+          exchange_options = listener.exchange_config[:exchange_options] || {}
+          exchange_type = listener.exchange_config[:type] || :topic
+          exchange_name = listener.exchange_config[:name] || 'amq.topic'
+          bind_key = listener.exchange_config[:bind_key]
+          unless bind_key
+            raise ArgumentError, "Can't specify exchange_config without a :bind_key, got #{listener.exchange_config.inspect}"
+          end
+          exchange = MQ::Exchange.new( MQ.new, exchange_type, exchange_name, 
+                                       {:durable => true, :auto_delete => false}.merge(exchange_options))
+          bind_proc = Proc.new do |queue|
+            queue.bind(exchange, {:key => bind_key}) 
+          end
+          info_string << " on a #{exchange_type} Exchange"
+          info_string << " named #{exchange_name.inspect}"
+          info_string << " bound with the key #{bind_key.inspect}"
+        end
+        AmqpListener.log :info, info_string
         
         extra_queue_opts = (listener.respond_to?(:queue_options) && listener.queue_options) || {}
         queue = MQ.queue(listener.queue_name, {:durable => true, :auto_delete => false}.merge(extra_queue_opts))
+        
+        if bind_proc
+          bind_proc.call(queue)
+        end
         
         queue.subscribe(:ack => true) do |h, m|
           run_message(listener, h, m)
@@ -263,17 +327,17 @@ class AmqpListener
   
   def self.run_message(listener, header, message)
     if AMQP.closing?
-      AmqpListener.log :debug, "#{message} (ignored, redelivered later)"
+      AmqpListener.log :debug, "\n#{AmqpListener.log_time_stamp} #{message} (ignored, redelivered later)"
     else
       message_transformed = message
       retry_count = 0
       begin
-        AmqpListener.log :info, "#{listener} is handling message: #{message}"
+        AmqpListener.log :info, "\n#{AmqpListener.log_time_stamp} #{listener} is handling message: #{message}"
         if listener.respond_to?(:exception_handler=)
           listener.exception_handler = Proc.new do |exception|
             get_exception_handler.call(listener, message_transformed, exception)
             header.ack
-            AmqpListener.log :error, "#{listener} got exception while handling #{message} -- #{exception}"
+            AmqpListener.log :error, "#{AmqpListener.log_time_stamp} #{listener} got exception while handling #{message} -- #{exception}"
             AmqpListener.log :error, exception.backtrace.join("\n")
           end
         end
@@ -284,11 +348,11 @@ class AmqpListener
           listener.on_message(message)
         end
         header.ack
-        AmqpListener.log :info, "#{listener} done handling #{message}"
+        AmqpListener.log :info, "#{AmqpListener.log_time_stamp} #{listener} done handling #{message}"
       rescue AmqpListener::AlreadyLocked => e
         #don't ack
         # header.reject(:requeue => true)
-        AmqpListener.log :warn, "#{listener} failed to get lock, will retry in 1 second #{message} -- #{e}"
+        AmqpListener.log :warn, "\n#{AmqpListener.log_time_stamp} #{listener} failed to get lock, will retry in 1 second #{message} -- #{e}"
         sleep(locks_config[:sleep_time])
         if retry_count >= locks_config[:max_retry]
           raise e
@@ -299,7 +363,7 @@ class AmqpListener
       rescue => exception
         get_exception_handler.call(listener, message_transformed, exception)
         header.ack
-        AmqpListener.log :error, "#{listener} got exception while handling #{message} -- #{exception}"
+        AmqpListener.log :error, "\n#{AmqpListener.log_time_stamp} #{listener} got exception while handling #{message} -- #{exception}"
         AmqpListener.log :error, exception.backtrace.join("\n")
       end
     end
